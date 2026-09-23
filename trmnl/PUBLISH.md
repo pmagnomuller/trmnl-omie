@@ -1,9 +1,10 @@
 # Publishing this plugin as a TRMNL recipe
 
-Order matters: **Unlisted first, Public second.** A recipe that is Public can
-only be made Unlisted again by emailing the TRMNL team, so the cheap reversible
-step goes first and the demo video is recorded while the endpoint is already
-live.
+Order: **Unlisted first, Public second**, so the cheap reversible step goes
+first and the demo video is recorded while the endpoint is already live. The
+claim that a Public recipe can only go back to Unlisted by emailing
+`team@trmnl.com` comes from third-party notes on TRMNL's flow, not a page we
+verified -- confirm it in the same email as the review request.
 
 ## What you get, what it costs
 
@@ -12,8 +13,8 @@ live.
 | Install path | One click from `trmnl.com/recipes`; installers get automatic updates from your master plugin |
 | Users need | Nothing: no UUID, no fork, no cron, no secret |
 | You need | The `gh-pages` JSON endpoint running, an MIT license (present), OMIE cited in the plugin description (present) |
-| Review | Unlisted skips moderation. Public is manually reviewed by TRMNL |
-| Reversibility | Public -> Unlisted requires contacting `team@trmnl.com` |
+| Review | TRMNL documents linting plus manual review for recipe submission; whether the unlisted route skips it is **unconfirmed** |
+| Reversibility | Third-party notes say `team@trmnl.com`; **unconfirmed** |
 
 ## Precondition: publish the polling plugin, not your own
 
@@ -24,9 +25,11 @@ own cron and secret -- exactly the friction the recipe is supposed to remove.
 Create a **second** private plugin:
 
 1. TRMNL -> **Plugins** -> **Private Plugin** -> Add.
-2. **Strategy** = `Polling`, **Polling verb** = `GET`, **Polling URL** =
-   `https://pmagnomuller.github.io/trmnl-omie/prices.json`,
-   **Refresh interval** = `15`. Reference values:
+2. **Strategy** = `Polling`, **Polling verb** = `GET`, **Polling URL** = the
+   address you verified with `curl -sL` below -- e.g.
+   `https://www.pedro-muller.com/trmnl-omie/prices-pt.json`. Do **not** guess a
+   `github.io` path: this account's custom domain 301-redirects every one of
+   them. **Refresh interval** = `15`. Reference values:
    [`polling/settings.yml.example`](polling/settings.yml.example).
 3. Paste the three layouts from [`src/`](src/) into the Markup editor.
 4. Name it `OMIE PT`, description as in
@@ -35,14 +38,44 @@ Create a **second** private plugin:
 
 Your existing webhook plugin keeps running untouched.
 
-Before submitting, confirm the endpoint answers:
+**Pages needs a plan that allows it.** On a private repository the free plan
+refuses to enable Pages (`422: Your current plan does not support GitHub Pages
+for this repository`), and the workflow cannot enable it for you. Pick one:
+
+| Option | Cost | Effect |
+|---|---|---|
+| Make this repository public | free | Pages enables immediately; the repo audit is already clean |
+| GitHub Pro | paid | Pages works on the private repo |
+| Other static host | free | Point the polling URL at Cloudflare Pages / Netlify / any host that serves the file you verified |
+
+The second and third options are drop-in: nothing in the plugin or the Liquid
+markup depends on GitHub Pages, only on the URL answering with the JSON.
+
+Before submitting, confirm the endpoint answers **with the JSON**, following
+redirects:
 
 ```bash
-curl -s https://pmagnomuller.github.io/trmnl-omie/prices.json | head -c 200
+curl -sL -o /dev/null -w '%{http_code}\n' "<verified-url>"   # want 200
+curl -sL "<verified-url>" | head -c 200                       # want {"area"
 ```
 
-Empty or 404 -> run the `Publish prices.json for polling` workflow manually once
-and enable **Settings -> Pages -> Deploy from a branch -> `gh-pages` / (root)**.
+404, or an empty body, means Pages is not serving this repository: run the
+`Publish prices.json for polling` workflow once, enable **Settings -> Pages ->
+Deploy from a branch -> `gh-pages` / (root)**, and re-check. Two traps seen on
+this account: a free plan refuses Pages on a private repository, and an
+account-level custom domain means the working URL is on `www.pedro-muller.com`,
+not `github.io`.
+
+Set `POLLING_URL` to that verified address so every deploy self-checks:
+
+```bash
+gh variable set POLLING_URL -b "<verified-url>" -R pmagnomuller/trmnl-omie
+```
+
+**Verify the polling merge before publishing.** The webhook posts
+`{"merge_variables": {...}}`; the polling file is the bare object. If the plugin
+preview shows no variables, rebuild with `--envelope` and serve the wrapped
+file.
 
 ## Step 1 -- publish Unlisted
 
@@ -77,7 +110,8 @@ sparkline of the next 8 hours. Refreshes every 15 minutes from a static JSON
 endpoint built by a GitHub Actions cron in the linked repo.
 
 Why public rather than private:
-It is the only OMIE day-ahead display on the marketplace, and OMIE prices drive
+I could not find another OMIE day-ahead recipe on the marketplace; correct me
+if one exists. OMIE prices drive
 real decisions in Portugal and Spain -- when to run the dishwasher, the washing
 machine, or charge an EV. The data is public and free, needs no credentials and
 no per-user setup, so it is useful to anyone in Iberia with a TRMNL, not just to
@@ -90,7 +124,7 @@ Data source: OMIE (omie.es), cited in the plugin description.
 Testing:
 No login, no credentials, no form fields. Install the recipe and it renders
 within one refresh cycle. The exact JSON it polls is public:
-https://pmagnomuller.github.io/trmnl-omie/prices.json
+<verified-url>
 
 Video demonstration: <link>
 
@@ -126,8 +160,11 @@ email.
   template keys as a public interface: add, do not rename.
 - **The endpoint is load-bearing.** If `publish-json.yml` breaks, every install
   freezes on its last payload. The webhook path is unaffected.
-- **Fork.** Forking needs the Developer edition add-on and stops automatic
-  updates. MIT covers it.
-- **Money.** TRMNL has said it pays developers for marketplace plugins. Confirm
-  the current terms with `team@trmnl.com` in the same email rather than
-  assuming a payout.
+- **Fork.** Reported to require the Developer edition add-on, and a fork stops
+  automatic updates; unverified here, confirm with `team@trmnl.com`. MIT covers
+  the licensing side either way.
+- **Money.** TRMNL has said it pays developers for marketplace plugins, with a
+  documented minimum connection count before payouts start. Confirm the current
+  terms and threshold with `team@trmnl.com` rather than assuming a payout.
+- **Placeholders.** `<verified-url>`, the plugin ID, the owner email and
+  `<link>` are intentionally unfilled. Fill them before sending.

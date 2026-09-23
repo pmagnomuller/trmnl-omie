@@ -20,11 +20,12 @@ jobs:
 
       - name: Push day-ahead prices to TRMNL
         env:
-          OMIE_AREA: PT
+          # Set the repository variable OMIE_AREA to ES to push Spain instead.
+          OMIE_AREA: ${{ vars.OMIE_AREA || 'PT' }}
           TRMNL_PLUGIN_UUID: ${{ secrets.TRMNL_PLUGIN_UUID }}
         run: |
           if [ -z "${TRMNL_PLUGIN_UUID}" ]; then
             echo "TRMNL_PLUGIN_UUID secret is not set" >&2
             exit 1
           fi
-          bash run.sh trmnl --area PT --push
+          bash run.sh trmnl --area "${OMIE_AREA}" --max-age-min 45 --push

@@ -11,6 +11,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta
@@ -537,7 +538,7 @@ def command_trmnl(args, default_area: str, config: dict):
     )
     encoded = json.dumps(payload, separators=(",", ":"))
     size = len(encoded.encode("utf-8"))
-    if size > 2000:
+    if args.push and size > 2000:
         # Shrink upcoming arrays until under soft 2KB webhook guidance
         for n in (24, 16, 12, 8):
             payload = build_trmnl_payload(
@@ -548,15 +549,33 @@ def command_trmnl(args, default_area: str, config: dict):
             if size <= 2000:
                 break
 
+    if args.max_age_min and args.max_age_min > 0:
+        slot_end = parse_dt(payload["current"]["ends_at"])
+        age_min = (datetime.now(IBERIAN_TZ) - slot_end).total_seconds() / 60.0
+        if age_min > args.max_age_min:
+            raise RuntimeError(
+                f"Stale data: active slot ended {age_min:.0f} min ago "
+                f"(limit {args.max_age_min:.0f} min). Refusing to publish."
+            )
+
     if args.out:
         out_path = Path(args.out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = out_path.with_name(out_path.name + ".tmp")
-        tmp_path.write_text(
-            json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8"
+        body = json.dumps(
+            {"merge_variables": payload} if args.envelope else payload,
+            separators=(",", ":"),
         )
-        tmp_path.replace(out_path)
-        print(f"Wrote {out_path} ({size} bytes)")
+        fd, tmp_name = tempfile.mkstemp(
+            dir=out_path.parent, prefix=out_path.name + ".", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(body + "\n")
+            os.replace(tmp_name, out_path)
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
+        print(f"Wrote {out_path} ({len(body.encode('utf-8'))} bytes)")
 
     if args.push:
         uuid = resolve_trmnl_uuid(config)
@@ -628,6 +647,20 @@ def build_parser():
         metavar="PATH",
         help="Write the payload JSON to PATH (atomic). Used to serve a public "
         "polling URL from CI; combine with --push to do both.",
+    )
+    s5.add_argument(
+        "--max-age-min",
+        type=float,
+        default=0.0,
+        metavar="MINUTES",
+        help="Exit 1 if the active 15-min slot ended more than MINUTES ago "
+        "(0 disables). Keeps a stale payload out of CI-published output.",
+    )
+    s5.add_argument(
+        "--envelope",
+        action="store_true",
+        help="With --out, wrap the payload as {\"merge_variables\": {...}} "
+        "(the webhook body shape) instead of the bare object.",
     )
     s5.add_argument("--start", help="Fetch window start YYYY-MM-DD.")
     s5.add_argument("--end", help="Fetch window end YYYY-MM-DD.")

@@ -1,10 +1,11 @@
 name: Publish prices.json for polling
 
-# Serves the same payload the webhook receives as a static JSON file on
-# GitHub Pages, so a TRMNL plugin using the Polling strategy (or anyone
-# else) can read it without holding a plugin UUID.
+# Serves the webhook payload as static JSON, so a TRMNL plugin on the Polling
+# strategy -- or anything else -- can read it without a plugin UUID.
 #
-# Endpoint: https://<owner>.github.io/<repo>/prices.json
+# Branch root: prices-pt.json, prices-es.json, .nojekyll, and CNAME when
+# trmnl/polling/CNAME exists. This branch is workflow-owned: every run
+# force-pushes, so do not keep other files there.
 
 on:
   schedule:
@@ -25,19 +26,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Build payload
-        env:
-          # Override with a repository variable to publish Spain instead.
-          OMIE_AREA: ${{ vars.OMIE_AREA || 'PT' }}
+      - name: Build payloads
         run: |
-          bash run.sh trmnl --area "${OMIE_AREA}" --out dist/prices.json
-          test -s dist/prices.json
+          set -euo pipefail
+          mkdir -p dist
+          # Both areas are built every run from the same OMIE files. One extra
+          # fetch beats leaving a stale file behind after an area switch, and
+          # each area gets its own path so one never overwrites the other.
+          for AREA in PT ES; do
+            LOWER="$(printf '%s' "$AREA" | tr '[:upper:]' '[:lower:]')"
+            bash run.sh trmnl --area "$AREA" --max-age-min 45 \
+              --out "dist/prices-${LOWER}.json"
+            test -s "dist/prices-${LOWER}.json"
+          done
+          if [ -f trmnl/polling/CNAME ]; then
+            cp trmnl/polling/CNAME dist/CNAME
+          fi
 
       - name: Deploy to gh-pages
         env:
@@ -54,3 +66,26 @@ jobs:
           git push -f \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             gh-pages
+
+      - name: Verify the polling URL serves this run's payload
+        env:
+          POLLING_URL: ${{ vars.POLLING_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${POLLING_URL}" ]; then
+            echo "::notice::Set the repository variable POLLING_URL to have this job verify the published endpoint."
+            exit 0
+          fi
+          built="$(python3 -c 'import json;print(json.load(open("dist/prices-pt.json"))["updated_at"])')"
+          served=""
+          for _ in $(seq 1 12); do
+            served="$(curl -fsSL --max-time 20 "${POLLING_URL}" \
+              | python3 -c 'import json,sys;print(json.load(sys.stdin).get("updated_at",""))' 2>/dev/null || true)"
+            if [ "${served}" = "${built}" ]; then
+              echo "Endpoint serving this run's payload (${built})."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::${POLLING_URL} does not serve this run's payload (built ${built}, last served '${served}'). Pages may be disabled, not yet built, or serving another host/path."
+          exit 1

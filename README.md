@@ -118,7 +118,8 @@ gantt
     tomorrow_ready = true                            :13:00, 11h
 ```
 
-Prices only change once a day when OMIE publishes. The 15-minute cron exists to move the "Now" slot label, recompute the cheapest-next window from the current time, and flip `tomorrow_ready` in the afternoon.
+Prices only change once a day when OMIE publishes. The 15-minute cron exists to move the "Now" slot label, recompute the cheapest-next window from the current time, and flip `tomorrow_ready` in the afternoon. Treat the 13:00 milestone as
+approximate: on 2026-09-23 tomorrow's file was still 404 at 13:20 Europe/Lisbon.
 
 ---
 
@@ -128,7 +129,7 @@ Prices only change once a day when OMIE publishes. The 15-minute cron exists to 
 
 ```mermaid
 flowchart TB
-    subgraph script["omie_energy.py (648 lines, stdlib only)"]
+    subgraph script["omie_energy.py (stdlib only, one file)"]
         direction TB
         cfg["config<br/>load_local_env_file · load_home_config · resolve_area · resolve_trmnl_uuid"]
         fetch["fetch<br/>fetch_day_file · download_text · parse_marginalpdbc · fetch_area_prices"]
@@ -223,7 +224,7 @@ flowchart LR
 
     pts & now --> cur["current_point<br/>startsAt ≤ now &lt; endsAt<br/>fallback: last past point"]
     pts & now --> up["upcoming_points<br/>endsAt &gt; now"]
-    pts --> td["today_points<br/>market_date == today"]
+    pts --> td["today filter<br/>market_date == today"]
 
     td --> stats["min / max / avg"]
     up --> bw["best_window(1h = 4 quarters)<br/>sliding sum, contiguity check"]
@@ -238,7 +239,7 @@ flowchart LR
 
 - **`best_window`** is a plain sliding window over `upcoming`, rejecting any chunk whose consecutive timestamps aren't exactly 15 min apart (guards DST gaps and missing rows). Cheapest = lowest sum of EUR/kWh.
 - **`bars`** are min-max normalised to integers 0–10 so Liquid can do `height: {{ h | times: 10 }}%` without floats.
-- **Size guard**: TRMNL's webhook guidance is ~2 KB. If the compact JSON exceeds 2000 bytes, `upcoming_count` is retried at 24, 16, 12, 8. Typical PT payload is ~1.1 KB at 32 points.
+- **Size guard**: TRMNL's webhook guidance is ~2 KB. If the compact JSON exceeds 2000 bytes, `upcoming_count` is retried at 24, 16, 12, 8, then the run fails if the payload is still oversized. Typical PT payload is ~1.1 KB at 32 points. Applies to `--push` only: the polling file is served over HTTP and is never truncated.
 - **`tomorrow_ready`** costs one extra GET but lets the template say "tomorrow's prices published" without a second data path.
 
 ### Rendering
@@ -247,7 +248,7 @@ TRMNL stores the POSTed `merge_variables` and re-renders on each device fetch. T
 
 | Template | Uses |
 |---|---|
-| `full.liquid` | `current.*`, `cheapest_next.*`, `today_*_label`, `upcoming.bars`, `upcoming.t`, `upcoming.count`, `area_label`, `updated_label` |
+| `full.liquid` | `current.*`, `cheapest_next.*`, `today_*_label`, `upcoming.bars`, `upcoming.t`, `upcoming.count`, `area`, `area_label`, `updated_label`, `tomorrow_ready` |
 | `half_vertical.liquid` | subset: current, cheapest next, today stats |
 | `quadrant.liquid` | current price + slot, cheapest next label |
 
@@ -283,9 +284,15 @@ flowchart TD
    gh workflow run trmnl-omie.yml -R <you>/trmnl-omie
    gh run watch -R <you>/trmnl-omie
    ```
-5. **Playlist.** Add the plugin to your device playlist. 15–30 min refresh is enough.
+5. **Playlist.** Add the plugin to your device playlist. Any refresh interval
+   that covers one cron cycle works; 15–30 min is what this setup uses.
 
-For Spain, change `OMIE_AREA: PT` to `ES` in the workflow. Field-by-field payload reference and troubleshooting: [`trmnl/SETUP.md`](trmnl/SETUP.md).
+For Spain, set the repository variable instead of editing files — both
+workflows read it:
+
+```bash
+gh variable set OMIE_AREA -b ES -R <you>/trmnl-omie
+``` Field-by-field payload reference and troubleshooting: [`trmnl/SETUP.md`](trmnl/SETUP.md).
 
 ---
 
@@ -296,7 +303,9 @@ The same script is a general OMIE CLI / agent skill.
 ```bash
 bash run.sh trmnl --area PT                 # print payload, no push
 bash run.sh trmnl --area PT --push          # push once
-bash run.sh trmnl --area PT --out dist/prices.json   # write JSON for a polling URL
+bash run.sh trmnl --area PT --out dist/prices-pt.json  # JSON for a polling URL
+bash run.sh trmnl --area PT --max-age-min 45 --out out.json  # fail if data is stale
+bash run.sh trmnl --area PT --envelope --out wrapped.json    # {"merge_variables": {...}}
 
 bash run.sh prices --area PT --hours 8      # next 32 periods
 bash run.sh prices --area ES --hours 36
@@ -323,24 +332,57 @@ the same payload readable by anything -- including a TRMNL plugin using the
 a static file instead:
 
 ```bash
-bash run.sh trmnl --area PT --out dist/prices.json
+bash run.sh trmnl --area PT --out dist/prices-pt.json
 ```
 
-`--out` writes the payload atomically (tmp file + rename) so a reader never sees
-a half-written file, and can be combined with `--push` to do both in one run.
+`--out` writes the payload atomically (unique temp file, then `rename`) and can
+be combined with `--push` to do both in one run. `--max-age-min N` refuses to
+publish when the active slot ended more than N minutes ago, which keeps a stale
+payload out of CI; `--envelope` wraps the file as `{"merge_variables": {...}}`
+if TRMNL turns out to expect the webhook body shape instead of the bare object.
 
 [`.github/workflows/publish-json.yml`](.github/workflows/publish-json.yml) does
-this every 15 minutes and force-pushes `dist/prices.json` to a `gh-pages`
-branch:
+this every 15 minutes for **both** areas and force-pushes the result to a
+`gh-pages` branch:
 
 ```
-https://<owner>.github.io/trmnl-omie/prices.json
+prices-pt.json
+prices-es.json
 ```
 
-Enable it once under **Settings -> Pages -> Deploy from a branch -> gh-pages /
-(root)**. Set the repository variable `OMIE_AREA` (`PT` or `ES`) to publish
-Spain instead of Portugal. The two workflows are independent: run either, or
-both.
+Two areas, two files, so switching area never overwrites the other one. Each
+run also fails if it cannot build a payload fresher than 45 minutes.
+
+**Verify the URL before trusting it.** The `gh-pages` branch existing does not
+mean the file is served. Enable Pages once under **Settings -> Pages -> Deploy
+from a branch -> `gh-pages` / (root)**, then check the URL that actually
+answers rather than assuming the shape:
+
+```bash
+curl -sL -o /dev/null -w '%{http_code}\n' https://<pages-host>/prices-pt.json   # want 200
+curl -sL https://<pages-host>/prices-pt.json | head -c 200                        # want {"area"
+```
+
+Two traps, both observed on this repo's own account:
+
+- A free plan cannot enable Pages on a **private** repository (the API answers
+  `422: Your current plan does not support GitHub Pages for this repository`).
+  Either make the repository public, use a paid plan, or serve `dist/` from any
+  other static host — nothing in the plugin depends on GitHub Pages.
+- If the account has a **custom domain** on its user site, every
+  `<owner>.github.io/...` URL 301-redirects to that domain, so the working
+  address is `https://<custom-domain>/<repo>/prices-pt.json`, not the
+  `github.io` one. Use `curl -sIL` (follow redirects) or you will read the
+  redirect body and think the file is empty.
+
+Once the URL answers, set it as a repository variable and every deploy run will
+self-check that Pages is serving the payload it just built:
+
+```bash
+gh variable set POLLING_URL -b "https://<pages-host>/prices-pt.json" -R <you>/trmnl-omie
+```
+
+The two workflows are independent: run either, or both.
 
 ## Publishing as a TRMNL recipe
 
@@ -359,9 +401,10 @@ Step-by-step, submission email draft and demo-video script:
 .
 ├── omie_energy.py              # everything: fetch, compute, CLI, TRMNL push
 ├── run.sh                      # source .env, exec python3
-├── requirements.txt            # empty on purpose (stdlib only)
+├── requirements.txt            # comment-only, no packages
 ├── .env.example                # OMIE_AREA, TRMNL_PLUGIN_UUID
 ├── config.json.example         # same keys, for ~/.config/omie-energy/
+├── .gitignore
 ├── SKILL.md                    # agent-skill metadata (OpenClaw / ClawHub)
 ├── LICENSE                     # MIT
 ├── trmnl/
@@ -369,7 +412,8 @@ Step-by-step, submission email draft and demo-video script:
 │   ├── PUBLISH.md              # recipe publishing: unlisted -> public
 │   ├── polling/
 │   │   └── settings.yml.example  # same plugin on the Polling strategy
-│   ├── .trmnlp.yml             # written by TRMNL GitHub sync (trmnlp serve config)
+│   ├── example.jpg             # photo of the live display
+│   ├── .trmnlp.yml             # trmnlp dev-server config (watch: src)
 │   └── src/                    # synced both ways with the TRMNL plugin
 │       ├── settings.yml        # plugin settings (strategy, refresh, id)
 │       ├── full.liquid
@@ -384,7 +428,7 @@ Step-by-step, submission email draft and demo-video script:
 
 ## Design decisions
 
-- **Push, not poll.** TRMNL's Polling strategy would need a public URL serving JSON. Webhook + GitHub Actions needs nothing hosted.
+- **Push first, poll for installs.** The webhook push needs nothing hosted; the Polling strategy needs a public URL. Both are built from one payload: the webhook path is the daily driver, polling is what makes a recipe installable by strangers ([Serving a public JSON endpoint](#serving-a-public-json-endpoint)).
 - **Stdlib only.** Earlier versions used the `OMIEData` PyPI package. Parsing the CSV directly removed the dependency, removed pandas, and made the 15-minute granularity available (the library exposed hourly).
 - **One file.** Skill runners (OpenClaw, Claude Code, Cursor) copy directories around. A single script with no imports beyond stdlib survives that.
 - **Compute on the pusher, not in Liquid.** Liquid has no date math and clumsy floats. All labels, rounding and normalisation happen in Python; templates only place strings.
@@ -399,9 +443,10 @@ Step-by-step, submission email draft and demo-video script:
 Price data comes from **OMIE** (OMI - Polo Espanol, S.A.), the Iberian
 day-ahead market operator: [omie.es](https://www.omie.es/en/market-results/daily/daily-market/daily-hourly-price).
 
-OMIE's [legal warning](https://www.omie.es/index.php/en/legal-warning) allows
-free use of its public information provided the source is cited and the content
-is not altered. This project cites OMIE in the plugin description and in the
+OMIE's [legal warning](https://www.omie.es/index.php/en/legal-warning) states
+(as read on 2026-09-23) that its public information may be used freely provided
+the source is cited and the content is not altered; re-read it before relying
+on that for redistribution. This project cites OMIE in the plugin description and in the
 README, and presents the published prices unmodified (unit label changed from
 EUR/MWh to EUR/kWh). It is an independent reader: not affiliated with, endorsed
 by, or supported by OMIE.
