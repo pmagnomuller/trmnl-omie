@@ -648,8 +648,8 @@ def build_parser():
     s5.add_argument(
         "--out",
         metavar="PATH",
-        help="Write the payload JSON to PATH (atomic). Used to serve a public "
-        "polling URL from CI; combine with --push to do both.",
+        help="Write the payload JSON to PATH (atomic). Local dumps only; "
+        "combine with --push if you also want a webhook update.",
     )
     s5.add_argument(
         "--max-age-min",
@@ -657,7 +657,7 @@ def build_parser():
         default=0.0,
         metavar="MINUTES",
         help="Exit 1 if the active 15-min slot ended more than MINUTES ago "
-        "(0 disables). Keeps a stale payload out of CI-published output.",
+        "(0 disables). Useful in CI before --push.",
     )
     s5.add_argument(
         "--envelope",

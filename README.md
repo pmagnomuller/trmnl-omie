@@ -26,8 +26,6 @@ No API keys for price data. The only secret is the TRMNL plugin UUID.
   - [Configuration precedence](#configuration-precedence)
 - [Setup](#setup)
 - [Local use](#local-use)
-- [Serving a public JSON endpoint](#serving-a-public-json-endpoint)
-- [Publishing as a TRMNL recipe](#publishing-as-a-trmnl-recipe)
 - [Repo layout](#repo-layout)
 - [Design decisions](#design-decisions)
 - [Attribution](#attribution)
@@ -239,7 +237,7 @@ flowchart LR
 
 - **`best_window`** is a plain sliding window over `upcoming`, rejecting any chunk whose consecutive timestamps aren't exactly 15 min apart (guards DST gaps and missing rows). Cheapest = lowest sum of EUR/kWh.
 - **`bars`** are min-max normalised to integers 0–10 so Liquid can do `height: {{ h | times: 10 }}%` without floats.
-- **Size guard**: TRMNL's webhook guidance is ~2 KB. If the compact JSON exceeds 2000 bytes, `upcoming_count` is retried at 24, 16, 12, 8, then the run fails if the payload is still oversized. Typical PT payload is ~1.1 KB at 32 points. Applies to `--push` only: the polling file is served over HTTP and is never truncated.
+- **Size guard**: TRMNL's webhook guidance is ~2 KB. If the compact JSON exceeds 2000 bytes, `upcoming_count` is retried at 24, 16, 12, 8, then the run fails if the payload is still oversized. Typical PT payload is ~1.1 KB at 32 points.
 - **`tomorrow_ready`** costs one extra GET but lets the template say "tomorrow's prices published" without a second data path.
 
 ### Rendering
@@ -287,12 +285,13 @@ flowchart TD
 5. **Playlist.** Add the plugin to your device playlist. Any refresh interval
    that covers one cron cycle works; 15–30 min is what this setup uses.
 
-For Spain, set the repository variable instead of editing files — both
-workflows read it:
+For Spain, set the repository variable instead of editing files:
 
 ```bash
 gh variable set OMIE_AREA -b ES -R <you>/trmnl-omie
-``` Field-by-field payload reference and troubleshooting: [`trmnl/SETUP.md`](trmnl/SETUP.md).
+```
+
+Field-by-field payload reference: [`trmnl/SETUP.md`](trmnl/SETUP.md).
 
 ---
 
@@ -303,9 +302,8 @@ The same script is a general OMIE CLI / agent skill.
 ```bash
 bash run.sh trmnl --area PT                 # print payload, no push
 bash run.sh trmnl --area PT --push          # push once
-bash run.sh trmnl --area PT --out dist/prices-pt.json  # JSON for a polling URL
+bash run.sh trmnl --area PT --out out.json  # write payload to a local file
 bash run.sh trmnl --area PT --max-age-min 45 --out out.json  # fail if data is stale
-bash run.sh trmnl --area PT --envelope --out wrapped.json    # {"merge_variables": {...}}
 
 bash run.sh prices --area PT --hours 8      # next 32 periods
 bash run.sh prices --area ES --hours 36
@@ -322,88 +320,8 @@ bash run.sh control --area PT --price-below 0.10 \
 
 Thresholds for `optimize` / `control` are **EUR/kWh**. All timestamps are `Europe/Lisbon`.
 
----
-
-## Serving a public JSON endpoint
-
-The webhook path needs a plugin UUID and something to run the cron. If you want
-the same payload readable by anything -- including a TRMNL plugin using the
-**Polling** strategy, which installs with no secret and no fork -- publish it as
-a static file instead:
-
-```bash
-bash run.sh trmnl --area PT --out dist/prices-pt.json
-```
-
-`--out` writes the payload atomically (unique temp file, then `rename`) and can
-be combined with `--push` to do both in one run -- push happens first, so a
-rejected webhook leaves no fresh file behind. When both are passed, the file
-holds the same post-shrink payload the webhook received. `--max-age-min N` refuses to
-publish when the active slot ended more than N minutes ago, which keeps a stale
-payload out of CI; `--envelope` wraps the file as `{"merge_variables": {...}}`
-if TRMNL turns out to expect the webhook body shape instead of the bare object;
-the workflow serves both shapes when the `ENVELOPE` repository variable is `1`.
-
-[`.github/workflows/publish-json.yml`](.github/workflows/publish-json.yml) does
-this every 15 minutes for **both** areas and force-pushes the result to a
-`gh-pages` branch:
-
-```
-prices-pt.json
-prices-es.json
-```
-
-Two areas, two files, so switching area never overwrites the other one. Each
-run also fails if it cannot build a payload fresher than 45 minutes.
-
-**GitHub Pages serves it** from the `gh-pages` branch (the repository is public
-for that reason on the free plan). Verified live:
-
-```
-https://www.pedro-muller.com/trmnl-omie/prices-pt.json
-```
-
-Note the host: the account has a custom domain on its user site, so every
-`pmagnomuller.github.io/trmnl-omie/...` URL 301-redirects to that domain. Always
-check the URL that actually answers rather than assuming the shape — follow
-redirects, or you read a 301 body and think the file is empty:
-
-```bash
-curl -sL -o /dev/null -w '%{http_code}\n' https://www.pedro-muller.com/trmnl-omie/prices-pt.json   # want 200
-curl -sL https://www.pedro-muller.com/trmnl-omie/prices-pt.json | head -c 200                       # want {"area"
-```
-
-Two traps, both observed on this repo's own account:
-
-- GitHub Pages refuses a **private** repository on the free plan (the API
-  answered `422: Your current plan does not support GitHub Pages for this
-  repository`), which is why this repository is public. Any static host works
-  — see [`trmnl/polling/HOSTING.md`](trmnl/polling/HOSTING.md) for Cloudflare
-  Pages, Netlify and self-hosted alternatives.
-- If the account has a **custom domain** on its user site, every
-  `<owner>.github.io/...` URL 301-redirects to that domain, so the working
-  address is `https://<custom-domain>/<repo>/prices-pt.json`, not the
-  `github.io` one. Use `curl -sIL` (follow redirects) or you will read the
-  redirect body and think the file is empty.
-
-Once the URL answers, set it as a repository variable and every deploy run will
-self-check that the host is serving the payload it just built (it compares
-against the file the URL names, and unwraps either shape):
-
-```bash
-gh variable set POLLING_URL -b "https://www.pedro-muller.com/trmnl-omie/prices-pt.json" -R <you>/trmnl-omie
-```
-
-The two workflows are independent: run either, or both.
-
-## Publishing as a TRMNL recipe
-
-This plugin is publishable as a **Recipe** so other people can install it in one
-click. Recipe installs are only frictionless with the polling endpoint above;
-the webhook path requires every user to fork the repo and add their own secret.
-
-Step-by-step, submission email draft and demo-video script:
-[`trmnl/PUBLISH.md`](trmnl/PUBLISH.md).
+There is **no** public GitHub Pages / polling JSON endpoint. Delivery is webhook-only
+(`TRMNL_PLUGIN_UUID`). `--out` is for local dumps only.
 
 ---
 
@@ -421,10 +339,6 @@ Step-by-step, submission email draft and demo-video script:
 ├── LICENSE                     # MIT
 ├── trmnl/
 │   ├── SETUP.md                # TRMNL walkthrough + payload field table
-│   ├── PUBLISH.md              # recipe publishing: unlisted -> public
-│   ├── polling/
-│   │   ├── HOSTING.md            # serve dist/ (Cloudflare Pages, Netlify, GH Pages)
-│   │   └── settings.yml.example  # same plugin on the Polling strategy
 │   ├── example.jpg             # photo of the live display
 │   ├── .trmnlp.yml             # trmnlp dev-server config (watch: src)
 │   └── src/                    # synced both ways with the TRMNL plugin
@@ -433,19 +347,17 @@ Step-by-step, submission email draft and demo-video script:
 │       ├── half_vertical.liquid
 │       └── quadrant.liquid
 └── .github/workflows/
-    ├── trmnl-omie.yml          # */15 cron + workflow_dispatch (webhook push)
-    └── publish-json.yml        # */15 cron -> gh-pages prices.json (polling)
+    └── trmnl-omie.yml          # */15 cron + workflow_dispatch (webhook push)
 ```
 
 ---
 
 ## Design decisions
 
-- **Push first, poll for installs.** The webhook push needs nothing hosted; the Polling strategy needs a public URL. Both are built from one payload: the webhook path is the daily driver, polling is what makes a recipe installable by strangers ([Serving a public JSON endpoint](#serving-a-public-json-endpoint)).
+- **Webhook only.** No public JSON host. The device gets data via your Private Plugin UUID; treat that UUID like a secret.
 - **Stdlib only.** Earlier versions used the `OMIEData` PyPI package. Parsing the CSV directly removed the dependency, removed pandas, and made the 15-minute granularity available (the library exposed hourly).
 - **One file.** Skill runners (OpenClaw, Claude Code, Cursor) copy directories around. A single script with no imports beyond stdlib survives that.
 - **Compute on the pusher, not in Liquid.** Liquid has no date math and clumsy floats. All labels, rounding and normalisation happen in Python; templates only place strings.
-- **Two delivery paths, one payload.** The webhook push and the `gh-pages` JSON come from the same `build_trmnl_payload` output. Polling exists so a published recipe can install without the user owning a cron or a secret.
 - **Idempotent pushes.** Every run rebuilds the full payload. No state, no diffing, safe to re-run or run twice.
 - **Fail loud in CI, fail soft on data.** Missing secret exits 1. Missing tomorrow's file is normal and returns `None`.
 
