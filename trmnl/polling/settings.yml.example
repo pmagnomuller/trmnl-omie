@@ -1,0 +1,18 @@
+# Reference: the same plugin configured for the Polling strategy, so it can be
+# installed or forked without the user holding a plugin UUID.
+#
+# Requires the gh-pages JSON endpoint from ../.github/workflows/publish-json.yml:
+#   https://<owner>.github.io/trmnl-omie/prices.json
+#
+# Paste these values into the plugin settings form. The Liquid markup in
+# ../src/ is unchanged -- the JSON body is the same payload the webhook receives.
+---
+strategy: polling
+polling_verb: get
+polling_url: https://pmagnomuller.github.io/trmnl-omie/prices.json
+polling_headers: ''
+polling_body: ''
+refresh_interval: 15
+framework_version: 3.3.2
+no_screen_padding: 'no'
+dark_mode: 'no'

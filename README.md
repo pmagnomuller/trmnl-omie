@@ -26,8 +26,12 @@ No API keys for price data. The only secret is the TRMNL plugin UUID.
   - [Configuration precedence](#configuration-precedence)
 - [Setup](#setup)
 - [Local use](#local-use)
+- [Serving a public JSON endpoint](#serving-a-public-json-endpoint)
+- [Publishing as a TRMNL recipe](#publishing-as-a-trmnl-recipe)
 - [Repo layout](#repo-layout)
 - [Design decisions](#design-decisions)
+- [Attribution](#attribution)
+- [License](#license)
 - [Related](#related)
 
 ---
@@ -292,6 +296,7 @@ The same script is a general OMIE CLI / agent skill.
 ```bash
 bash run.sh trmnl --area PT                 # print payload, no push
 bash run.sh trmnl --area PT --push          # push once
+bash run.sh trmnl --area PT --out dist/prices.json   # write JSON for a polling URL
 
 bash run.sh prices --area PT --hours 8      # next 32 periods
 bash run.sh prices --area ES --hours 36
@@ -310,6 +315,44 @@ Thresholds for `optimize` / `control` are **EUR/kWh**. All timestamps are `Europ
 
 ---
 
+## Serving a public JSON endpoint
+
+The webhook path needs a plugin UUID and something to run the cron. If you want
+the same payload readable by anything -- including a TRMNL plugin using the
+**Polling** strategy, which installs with no secret and no fork -- publish it as
+a static file instead:
+
+```bash
+bash run.sh trmnl --area PT --out dist/prices.json
+```
+
+`--out` writes the payload atomically (tmp file + rename) so a reader never sees
+a half-written file, and can be combined with `--push` to do both in one run.
+
+[`.github/workflows/publish-json.yml`](.github/workflows/publish-json.yml) does
+this every 15 minutes and force-pushes `dist/prices.json` to a `gh-pages`
+branch:
+
+```
+https://<owner>.github.io/trmnl-omie/prices.json
+```
+
+Enable it once under **Settings -> Pages -> Deploy from a branch -> gh-pages /
+(root)**. Set the repository variable `OMIE_AREA` (`PT` or `ES`) to publish
+Spain instead of Portugal. The two workflows are independent: run either, or
+both.
+
+## Publishing as a TRMNL recipe
+
+This plugin is publishable as a **Recipe** so other people can install it in one
+click. Recipe installs are only frictionless with the polling endpoint above;
+the webhook path requires every user to fork the repo and add their own secret.
+
+Step-by-step, submission email draft and demo-video script:
+[`trmnl/PUBLISH.md`](trmnl/PUBLISH.md).
+
+---
+
 ## Repo layout
 
 ```
@@ -320,8 +363,12 @@ Thresholds for `optimize` / `control` are **EUR/kWh**. All timestamps are `Europ
 ├── .env.example                # OMIE_AREA, TRMNL_PLUGIN_UUID
 ├── config.json.example         # same keys, for ~/.config/omie-energy/
 ├── SKILL.md                    # agent-skill metadata (OpenClaw / ClawHub)
+├── LICENSE                     # MIT
 ├── trmnl/
 │   ├── SETUP.md                # TRMNL walkthrough + payload field table
+│   ├── PUBLISH.md              # recipe publishing: unlisted -> public
+│   ├── polling/
+│   │   └── settings.yml.example  # same plugin on the Polling strategy
 │   ├── .trmnlp.yml             # written by TRMNL GitHub sync (trmnlp serve config)
 │   └── src/                    # synced both ways with the TRMNL plugin
 │       ├── settings.yml        # plugin settings (strategy, refresh, id)
@@ -329,7 +376,8 @@ Thresholds for `optimize` / `control` are **EUR/kWh**. All timestamps are `Europ
 │       ├── half_vertical.liquid
 │       └── quadrant.liquid
 └── .github/workflows/
-    └── trmnl-omie.yml          # */15 cron + workflow_dispatch
+    ├── trmnl-omie.yml          # */15 cron + workflow_dispatch (webhook push)
+    └── publish-json.yml        # */15 cron -> gh-pages prices.json (polling)
 ```
 
 ---
@@ -340,8 +388,30 @@ Thresholds for `optimize` / `control` are **EUR/kWh**. All timestamps are `Europ
 - **Stdlib only.** Earlier versions used the `OMIEData` PyPI package. Parsing the CSV directly removed the dependency, removed pandas, and made the 15-minute granularity available (the library exposed hourly).
 - **One file.** Skill runners (OpenClaw, Claude Code, Cursor) copy directories around. A single script with no imports beyond stdlib survives that.
 - **Compute on the pusher, not in Liquid.** Liquid has no date math and clumsy floats. All labels, rounding and normalisation happen in Python; templates only place strings.
+- **Two delivery paths, one payload.** The webhook push and the `gh-pages` JSON come from the same `build_trmnl_payload` output. Polling exists so a published recipe can install without the user owning a cron or a secret.
 - **Idempotent pushes.** Every run rebuilds the full payload. No state, no diffing, safe to re-run or run twice.
 - **Fail loud in CI, fail soft on data.** Missing secret exits 1. Missing tomorrow's file is normal and returns `None`.
+
+---
+
+## Attribution
+
+Price data comes from **OMIE** (OMI - Polo Espanol, S.A.), the Iberian
+day-ahead market operator: [omie.es](https://www.omie.es/en/market-results/daily/daily-market/daily-hourly-price).
+
+OMIE's [legal warning](https://www.omie.es/index.php/en/legal-warning) allows
+free use of its public information provided the source is cited and the content
+is not altered. This project cites OMIE in the plugin description and in the
+README, and presents the published prices unmodified (unit label changed from
+EUR/MWh to EUR/kWh). It is an independent reader: not affiliated with, endorsed
+by, or supported by OMIE.
+
+Wholesale market prices only -- no retail taxes, network fees or supplier
+margins. Nothing here is investment advice.
+
+## License
+
+MIT -- see [LICENSE](LICENSE).
 
 ---
 

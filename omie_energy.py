@@ -548,6 +548,16 @@ def command_trmnl(args, default_area: str, config: dict):
             if size <= 2000:
                 break
 
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = out_path.with_name(out_path.name + ".tmp")
+        tmp_path.write_text(
+            json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8"
+        )
+        tmp_path.replace(out_path)
+        print(f"Wrote {out_path} ({size} bytes)")
+
     if args.push:
         uuid = resolve_trmnl_uuid(config)
         if not uuid:
@@ -612,6 +622,12 @@ def build_parser():
         type=int,
         default=32,
         help="Number of upcoming 15-min slots in sparkline arrays.",
+    )
+    s5.add_argument(
+        "--out",
+        metavar="PATH",
+        help="Write the payload JSON to PATH (atomic). Used to serve a public "
+        "polling URL from CI; combine with --push to do both.",
     )
     s5.add_argument("--start", help="Fetch window start YYYY-MM-DD.")
     s5.add_argument("--end", help="Fetch window end YYYY-MM-DD.")
