@@ -2,6 +2,10 @@
 
 Iberian day-ahead electricity prices (OMIE, Portugal / Spain, 15-minute periods) on a [TRMNL](https://trmnl.com) e-ink display.
 
+![TRMNL showing OMIE Portugal day-ahead prices](trmnl/example.jpg)
+
+*Live Private Plugin: current 15-min slot, cheapest next hour, today’s min/avg/max, and upcoming sparkline.*
+
 A GitHub Actions cron runs a single stdlib-only Python script every 15 minutes. The script downloads OMIE's public price file, computes the current slot, today's stats, the cheapest upcoming window and a sparkline, and POSTs a compact JSON payload to a TRMNL Private Plugin webhook. TRMNL renders it with the Liquid markup in this repo and the device pulls the image on its next wake.
 
 No API keys for price data. The only secret is the TRMNL plugin UUID.
