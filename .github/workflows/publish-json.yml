@@ -5,7 +5,9 @@ name: Publish prices.json for polling
 #
 # Branch root: prices-pt.json, prices-es.json, .nojekyll, and CNAME when
 # trmnl/polling/CNAME exists. This branch is workflow-owned: every run
-# force-pushes, so do not keep other files there.
+# force-pushes, so do not keep other files there. GitHub Pages serves it at
+# https://www.pedro-muller.com/trmnl-omie/ (the account custom domain; every
+# github.io path 301-redirects there). Alternative hosts: trmnl/polling/HOSTING.md.
 
 on:
   schedule:
@@ -69,23 +71,6 @@ jobs:
             fi
           fi
 
-      - name: Deploy to Cloudflare Pages
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          PROJECT: ${{ vars.CF_PAGES_PROJECT || 'trmnl-omie' }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CLOUDFLARE_API_TOKEN}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID}" ]; then
-            echo "::notice::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set; skipping the Pages upload. See trmnl/polling/HOSTING.md."
-            exit 0
-          fi
-          # Idempotent: creating an existing project fails, which is fine.
-          npx --yes wrangler@4 pages project create "${PROJECT}" --production-branch main \
-            || echo "::notice::Pages project ${PROJECT} already exists."
-          npx --yes wrangler@4 pages deploy dist --project-name "${PROJECT}" \
-            --branch main --commit-dirty=true
-
       - name: Deploy to gh-pages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -111,15 +96,17 @@ jobs:
             echo "::notice::Set the repository variable POLLING_URL to have this job verify the published endpoint."
             exit 0
           fi
-          # Compare against the file the URL actually names, and unwrap the
-          # envelope shape, so an -es or -envelope endpoint is not a false red.
-          case "$(basename "${POLLING_URL%%\?*}")" in
-            *es*)      FILE=dist/prices-es.json ;;
-            *envelope*) FILE=dist/prices-pt-envelope.json ;;
-            *)         FILE=dist/prices-pt.json ;;
-          esac
+          # Compare against the file the URL names. Exact filename, never a
+          # glob: `*es*` also matches prices-pt.json ("pric-es"), which compared
+          # the ES payload against the PT endpoint and reddened every run.
+          NAME="$(basename "${POLLING_URL%%\?*}")"
+          FILE="dist/${NAME}"
           if [ ! -s "${FILE}" ]; then
-            echo "::error::POLLING_URL names ${FILE}, which this run did not build."
+            echo "::notice::No dist/${NAME} in this run; comparing against dist/prices-pt.json."
+            FILE=dist/prices-pt.json
+          fi
+          if [ ! -s "${FILE}" ]; then
+            echo "::error::Neither dist/${NAME} nor dist/prices-pt.json exists in this run."
             exit 1
           fi
           built="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));d=d.get("merge_variables",d);print(d["updated_at"])' "${FILE}")"

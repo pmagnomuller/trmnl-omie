@@ -57,12 +57,12 @@ Add the plugin to your device playlist. Any interval covering one cron cycle wor
 Use this when you do not want to store a plugin UUID anywhere, or when someone
 else installs the plugin as a recipe.
 
-1. Put the JSON somewhere public. This repo uses **Cloudflare Pages** (free,
-   private repos fine) -- two secrets and it is live:
-   [`polling/HOSTING.md`](polling/HOSTING.md). GitHub Pages is the alternative
-   if the repository is public or the plan is paid. The workflow
+1. The JSON is served by **GitHub Pages** from the `gh-pages` branch, which is
+   why this repository is public:
+   `https://www.pedro-muller.com/trmnl-omie/prices-pt.json`. The workflow
    [`../.github/workflows/publish-json.yml`](../.github/workflows/publish-json.yml)
-   uploads on every run (`workflow_dispatch` works immediately).
+   publishes on every run (`workflow_dispatch` works immediately). Other hosts,
+   including Cloudflare Pages and Netlify: [`polling/HOSTING.md`](polling/HOSTING.md).
 2. Find the URL that actually answers before copying it anywhere. The branch
    existing is not proof the file is served, and a `<owner>.github.io` address
    is wrong for any account with a custom domain on its user site (every such
@@ -96,12 +96,11 @@ Reference copy of the plugin settings for this strategy:
 
 Notes:
 
-- Hosting is the step that fails most often when it is GitHub Pages: a free
-  plan refuses Pages on a **private** repository (the API answers `422: Your
-  current plan does not support GitHub Pages for this repository`), and an
-  account-level **custom domain** rewrites every `<owner>.github.io/...` URL.
-  Cloudflare Pages sidesteps both -- see
-  [`polling/HOSTING.md`](polling/HOSTING.md).
+- A free plan refuses Pages on a **private** repository (the API answers
+  `422: Your current plan does not support GitHub Pages for this repository`),
+  and this account's **custom domain** rewrites every `<owner>.github.io/...`
+  URL. Both are handled here: the repository is public and the polling URL uses
+  the custom domain.
 - Any static host works: Cloudflare Pages, Netlify, an existing server. Nothing
   in the plugin depends on GitHub Pages, only on the URL answering with the
   JSON.

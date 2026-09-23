@@ -356,24 +356,30 @@ prices-es.json
 Two areas, two files, so switching area never overwrites the other one. Each
 run also fails if it cannot build a payload fresher than 45 minutes.
 
-**Pick a host, then verify the URL.** A branch existing does not mean the file
-is served. This repo serves from **Cloudflare Pages** -- free, works with a
-private repository, no plan wall; step-by-step in
-[`trmnl/polling/HOSTING.md`](trmnl/polling/HOSTING.md). GitHub Pages also works
-if the repository is public (or the plan is paid). Whichever you use, check the
-URL that actually answers rather than assuming the shape:
+**GitHub Pages serves it** from the `gh-pages` branch (the repository is public
+for that reason on the free plan). Verified live:
+
+```
+https://www.pedro-muller.com/trmnl-omie/prices-pt.json
+```
+
+Note the host: the account has a custom domain on its user site, so every
+`pmagnomuller.github.io/trmnl-omie/...` URL 301-redirects to that domain. Always
+check the URL that actually answers rather than assuming the shape — follow
+redirects, or you read a 301 body and think the file is empty:
 
 ```bash
-curl -sL -o /dev/null -w '%{http_code}\n' https://<pages-host>/prices-pt.json   # want 200
-curl -sL https://<pages-host>/prices-pt.json | head -c 200                        # want {"area"
+curl -sL -o /dev/null -w '%{http_code}\n' https://www.pedro-muller.com/trmnl-omie/prices-pt.json   # want 200
+curl -sL https://www.pedro-muller.com/trmnl-omie/prices-pt.json | head -c 200                       # want {"area"
 ```
 
 Two traps, both observed on this repo's own account:
 
 - GitHub Pages refuses a **private** repository on the free plan (the API
-  answers `422: Your current plan does not support GitHub Pages for this
-  repository`), which is why this repo uses Cloudflare Pages. Any static host
-  works — nothing in the plugin depends on GitHub Pages.
+  answered `422: Your current plan does not support GitHub Pages for this
+  repository`), which is why this repository is public. Any static host works
+  — see [`trmnl/polling/HOSTING.md`](trmnl/polling/HOSTING.md) for Cloudflare
+  Pages, Netlify and self-hosted alternatives.
 - If the account has a **custom domain** on its user site, every
   `<owner>.github.io/...` URL 301-redirects to that domain, so the working
   address is `https://<custom-domain>/<repo>/prices-pt.json`, not the
@@ -382,11 +388,10 @@ Two traps, both observed on this repo's own account:
 
 Once the URL answers, set it as a repository variable and every deploy run will
 self-check that the host is serving the payload it just built (it compares
-against the file the URL names, and unwraps either shape). Cloudflare Pages
-serves `https://<project>.pages.dev/prices-pt.json`:
+against the file the URL names, and unwraps either shape):
 
 ```bash
-gh variable set POLLING_URL -b "https://<pages-host>/prices-pt.json" -R <you>/trmnl-omie
+gh variable set POLLING_URL -b "https://www.pedro-muller.com/trmnl-omie/prices-pt.json" -R <you>/trmnl-omie
 ```
 
 The two workflows are independent: run either, or both.
