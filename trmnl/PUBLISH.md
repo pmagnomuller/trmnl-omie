@@ -74,8 +74,9 @@ gh variable set POLLING_URL -b "<verified-url>" -R pmagnomuller/trmnl-omie
 
 **Verify the polling merge before publishing.** The webhook posts
 `{"merge_variables": {...}}`; the polling file is the bare object. If the plugin
-preview shows no variables, rebuild with `--envelope` and serve the wrapped
-file.
+preview shows no variables, set the repository variable `ENVELOPE=1` so the
+workflow also publishes `prices-pt-envelope.json`, and point the polling URL at
+that file instead.
 
 ## Step 1 -- publish Unlisted
 

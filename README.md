@@ -336,10 +336,13 @@ bash run.sh trmnl --area PT --out dist/prices-pt.json
 ```
 
 `--out` writes the payload atomically (unique temp file, then `rename`) and can
-be combined with `--push` to do both in one run. `--max-age-min N` refuses to
+be combined with `--push` to do both in one run -- push happens first, so a
+rejected webhook leaves no fresh file behind. When both are passed, the file
+holds the same post-shrink payload the webhook received. `--max-age-min N` refuses to
 publish when the active slot ended more than N minutes ago, which keeps a stale
 payload out of CI; `--envelope` wraps the file as `{"merge_variables": {...}}`
-if TRMNL turns out to expect the webhook body shape instead of the bare object.
+if TRMNL turns out to expect the webhook body shape instead of the bare object;
+the workflow serves both shapes when the `ENVELOPE` repository variable is `1`.
 
 [`.github/workflows/publish-json.yml`](.github/workflows/publish-json.yml) does
 this every 15 minutes for **both** areas and force-pushes the result to a
@@ -376,7 +379,8 @@ Two traps, both observed on this repo's own account:
   redirect body and think the file is empty.
 
 Once the URL answers, set it as a repository variable and every deploy run will
-self-check that Pages is serving the payload it just built:
+self-check that Pages is serving the payload it just built (it compares against
+the file the URL names, and unwraps either shape):
 
 ```bash
 gh variable set POLLING_URL -b "https://<pages-host>/prices-pt.json" -R <you>/trmnl-omie

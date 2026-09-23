@@ -84,8 +84,10 @@ else installs the plugin as a recipe.
    The webhook sends `{"merge_variables": {...}}`; polling serves the bare
    object. Which one TRMNL's polling merge expects is not established by this
    repo, so verify it in the plugin preview. If the preview shows no variables,
-   rebuild the file with `--envelope`, which wraps it as
-   `{"merge_variables": {...}}`, and point the URL at that file.
+   set the repository variable `ENVELOPE=1`
+   (`gh variable set ENVELOPE -b 1 -R <you>/trmnl-omie`): the workflow then also
+   publishes `prices-pt-envelope.json` / `prices-es-envelope.json`, wrapped as
+   `{"merge_variables": {...}}`. Point the polling URL at one of those.
 
 Reference copy of the plugin settings for this strategy:
 [`polling/settings.yml.example`](polling/settings.yml.example).

@@ -558,25 +558,8 @@ def command_trmnl(args, default_area: str, config: dict):
                 f"(limit {args.max_age_min:.0f} min). Refusing to publish."
             )
 
-    if args.out:
-        out_path = Path(args.out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        body = json.dumps(
-            {"merge_variables": payload} if args.envelope else payload,
-            separators=(",", ":"),
-        )
-        fd, tmp_name = tempfile.mkstemp(
-            dir=out_path.parent, prefix=out_path.name + ".", suffix=".tmp"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(body + "\n")
-            os.replace(tmp_name, out_path)
-        except BaseException:
-            Path(tmp_name).unlink(missing_ok=True)
-            raise
-        print(f"Wrote {out_path} ({len(body.encode('utf-8'))} bytes)")
-
+    # Push first: a rejected or failed webhook should not leave a fresh file
+    # behind for a payload that was never delivered.
     if args.push:
         uuid = resolve_trmnl_uuid(config)
         if not uuid:
@@ -585,9 +568,29 @@ def command_trmnl(args, default_area: str, config: dict):
             )
         push_trmnl(uuid, payload)
         print(f"Payload size: {size} bytes")
-    else:
+    elif not args.out:
         print(json.dumps(payload, indent=2))
+    if not args.push:
         print(f"# payload size: {size} bytes", file=sys.stderr)
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        body = json.dumps(
+            {"merge_variables": payload} if args.envelope else payload,
+            separators=(",", ":"),
+        ) + "\n"
+        fd, tmp_name = tempfile.mkstemp(
+            dir=out_path.parent, prefix=out_path.name + ".", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(body)
+            os.replace(tmp_name, out_path)
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
+        print(f"Wrote {out_path} ({len(body.encode('utf-8'))} bytes)")
 
 
 def build_parser():
@@ -597,13 +600,13 @@ def build_parser():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s1 = sub.add_parser("prices", help="Show upcoming 15-min day-ahead prices.")
-    s1.add_argument("--area", choices=sorted(VALID_AREAS), help="PT or ES (default: OMIE_AREA or PT).")
+    s1.add_argument("--area", type=str.upper, choices=sorted(VALID_AREAS), help="PT or ES (default: OMIE_AREA or PT).")
     s1.add_argument("--hours", type=float, default=24, help="Wall-clock hours of upcoming periods.")
     s1.add_argument("--start", help="Fetch window start YYYY-MM-DD.")
     s1.add_argument("--end", help="Fetch window end YYYY-MM-DD.")
 
     s2 = sub.add_parser("optimize", help="Find cheapest contiguous time window.")
-    s2.add_argument("--area", choices=sorted(VALID_AREAS), help="PT or ES (default: OMIE_AREA or PT).")
+    s2.add_argument("--area", type=str.upper, choices=sorted(VALID_AREAS), help="PT or ES (default: OMIE_AREA or PT).")
     s2.add_argument("--duration-hours", type=float)
     s2.add_argument("--kwh", type=float)
     s2.add_argument("--power-kw", type=float)
@@ -618,7 +621,7 @@ def build_parser():
     s3.add_argument("--end", help="Fetch window end YYYY-MM-DD.")
 
     s4 = sub.add_parser("control", help="Trigger commands from current price thresholds.")
-    s4.add_argument("--area", choices=sorted(VALID_AREAS), help="PT or ES (default: OMIE_AREA or PT).")
+    s4.add_argument("--area", type=str.upper, choices=sorted(VALID_AREAS), help="PT or ES (default: OMIE_AREA or PT).")
     s4.add_argument("--price-below", type=float, help="Threshold in EUR/kWh.")
     s4.add_argument("--price-above", type=float, help="Threshold in EUR/kWh.")
     s4.add_argument("--on-command")
@@ -628,7 +631,7 @@ def build_parser():
     s4.add_argument("--end", help="Fetch window end YYYY-MM-DD.")
 
     s5 = sub.add_parser("trmnl", help="Build compact JSON for a TRMNL Private Plugin webhook.")
-    s5.add_argument("--area", choices=sorted(VALID_AREAS), help="PT or ES (default: OMIE_AREA or PT).")
+    s5.add_argument("--area", type=str.upper, choices=sorted(VALID_AREAS), help="PT or ES (default: OMIE_AREA or PT).")
     s5.add_argument("--push", action="store_true", help="POST merge_variables to TRMNL webhook.")
     s5.add_argument(
         "--cheap-hours",

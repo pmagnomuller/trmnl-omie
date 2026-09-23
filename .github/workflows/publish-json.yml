@@ -35,20 +35,38 @@ jobs:
           python-version: "3.12"
 
       - name: Build payloads
+        env:
+          # Set the repository variable ENVELOPE=1 if the polling merge wants
+          # the webhook body shape; adds prices-<area>-envelope.json files.
+          ENVELOPE: ${{ vars.ENVELOPE }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          # Both areas are built every run from the same OMIE files. One extra
+          # Both areas are built every run from the same OMIE files, so one extra
           # fetch beats leaving a stale file behind after an area switch, and
           # each area gets its own path so one never overwrites the other.
+          # set -e aborts the loop at the first failure: an ES-only problem
+          # (parse gap, network) blocks the PT file too. Deliberate: the pair
+          # stays consistent. Cost is availability, never a mismatched pair.
           for AREA in PT ES; do
             LOWER="$(printf '%s' "$AREA" | tr '[:upper:]' '[:lower:]')"
             bash run.sh trmnl --area "$AREA" --max-age-min 45 \
               --out "dist/prices-${LOWER}.json"
             test -s "dist/prices-${LOWER}.json"
+            if [ "${ENVELOPE:-}" = "1" ]; then
+              bash run.sh trmnl --area "$AREA" --max-age-min 45 --envelope \
+                --out "dist/prices-${LOWER}-envelope.json"
+              test -s "dist/prices-${LOWER}-envelope.json"
+            fi
           done
+          # CNAME is opt-in and only for hosts that need it. This account's
+          # custom domain already serves project paths, so it is normally absent.
           if [ -f trmnl/polling/CNAME ]; then
-            cp trmnl/polling/CNAME dist/CNAME
+            if grep -Eq '^[A-Za-z0-9.-]+$' trmnl/polling/CNAME; then
+              cp trmnl/polling/CNAME dist/CNAME
+            else
+              echo "::warning::trmnl/polling/CNAME is not a bare hostname; ignored."
+            fi
           fi
 
       - name: Deploy to gh-pages
@@ -76,16 +94,27 @@ jobs:
             echo "::notice::Set the repository variable POLLING_URL to have this job verify the published endpoint."
             exit 0
           fi
-          built="$(python3 -c 'import json;print(json.load(open("dist/prices-pt.json"))["updated_at"])')"
+          # Compare against the file the URL actually names, and unwrap the
+          # envelope shape, so an -es or -envelope endpoint is not a false red.
+          case "$(basename "${POLLING_URL%%\?*}")" in
+            *es*)      FILE=dist/prices-es.json ;;
+            *envelope*) FILE=dist/prices-pt-envelope.json ;;
+            *)         FILE=dist/prices-pt.json ;;
+          esac
+          if [ ! -s "${FILE}" ]; then
+            echo "::error::POLLING_URL names ${FILE}, which this run did not build."
+            exit 1
+          fi
+          built="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));d=d.get("merge_variables",d);print(d["updated_at"])' "${FILE}")"
           served=""
-          for _ in $(seq 1 12); do
+          for attempt in $(seq 1 20); do
             served="$(curl -fsSL --max-time 20 "${POLLING_URL}" \
-              | python3 -c 'import json,sys;print(json.load(sys.stdin).get("updated_at",""))' 2>/dev/null || true)"
+              | python3 -c 'import json,sys;d=json.load(sys.stdin);d=d.get("merge_variables",d);print(d.get("updated_at",""))' 2>/dev/null || true)"
             if [ "${served}" = "${built}" ]; then
               echo "Endpoint serving this run's payload (${built})."
               exit 0
             fi
-            sleep 10
+            if [ "${attempt}" -lt 20 ]; then sleep 15; fi
           done
           echo "::error::${POLLING_URL} does not serve this run's payload (built ${built}, last served '${served}'). Pages may be disabled, not yet built, or serving another host/path."
           exit 1
