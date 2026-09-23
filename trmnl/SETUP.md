@@ -57,10 +57,12 @@ Add the plugin to your device playlist. Any interval covering one cron cycle wor
 Use this when you do not want to store a plugin UUID anywhere, or when someone
 else installs the plugin as a recipe.
 
-1. Enable the JSON endpoint once: repo **Settings → Pages → Deploy from a
-   branch → `gh-pages` / `(root)`**. The workflow
+1. Put the JSON somewhere public. This repo uses **Cloudflare Pages** (free,
+   private repos fine) -- two secrets and it is live:
+   [`polling/HOSTING.md`](polling/HOSTING.md). GitHub Pages is the alternative
+   if the repository is public or the plan is paid. The workflow
    [`../.github/workflows/publish-json.yml`](../.github/workflows/publish-json.yml)
-   creates that branch on its first run (`workflow_dispatch` works immediately).
+   uploads on every run (`workflow_dispatch` works immediately).
 2. Find the URL that actually answers before copying it anywhere. The branch
    existing is not proof the file is served, and a `<owner>.github.io` address
    is wrong for any account with a custom domain on its user site (every such
@@ -94,15 +96,15 @@ Reference copy of the plugin settings for this strategy:
 
 Notes:
 
-- Enabling Pages is the step that fails most often, and it is not always about
-  the repository: a free plan refuses Pages on a **private** repository (the API
-  answers `422: Your current plan does not support GitHub Pages for this
-  repository`), and an account-level **custom domain** rewrites every
-  `<owner>.github.io/...` URL. Check the current GitHub plan requirements for
-  your account rather than assuming either way.
-- Any static host works instead -- Cloudflare Pages, Netlify, an existing
-  server. Nothing in the plugin depends on GitHub Pages, only on the URL
-  answering with the JSON.
+- Hosting is the step that fails most often when it is GitHub Pages: a free
+  plan refuses Pages on a **private** repository (the API answers `422: Your
+  current plan does not support GitHub Pages for this repository`), and an
+  account-level **custom domain** rewrites every `<owner>.github.io/...` URL.
+  Cloudflare Pages sidesteps both -- see
+  [`polling/HOSTING.md`](polling/HOSTING.md).
+- Any static host works: Cloudflare Pages, Netlify, an existing server. Nothing
+  in the plugin depends on GitHub Pages, only on the URL answering with the
+  JSON.
 - Pages caches; a push to `gh-pages` can take a couple of minutes to show.
   TRMNL caches too, so a stale slot label for one refresh cycle is normal.
   Setting the repository variable `POLLING_URL` makes the deploy workflow

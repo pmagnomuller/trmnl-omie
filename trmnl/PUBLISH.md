@@ -38,15 +38,17 @@ Create a **second** private plugin:
 
 Your existing webhook plugin keeps running untouched.
 
-**Pages needs a plan that allows it.** On a private repository the free plan
-refuses to enable Pages (`422: Your current plan does not support GitHub Pages
-for this repository`), and the workflow cannot enable it for you. Pick one:
+**Hosting is settled: Cloudflare Pages.** Free, works with this private
+repository, no plan wall. Setup is two secrets and one variable --
+[`polling/HOSTING.md`](polling/HOSTING.md). Files land at
+`https://trmnl-omie.pages.dev/prices-pt.json`. Until the secrets exist the
+deploy step skips with a notice, so nothing breaks in the meantime.
 
-| Option | Cost | Effect |
+| Alternative | Cost | Effect |
 |---|---|---|
-| Make this repository public | free | Pages enables immediately; the repo audit is already clean |
+| Make this repository public, then GitHub Pages | free | Pages enables immediately; the repo audit is already clean |
 | GitHub Pro | paid | Pages works on the private repo |
-| Other static host | free | Point the polling URL at Cloudflare Pages / Netlify / any host that serves the file you verified |
+| Netlify or any static host | free | Same two-secret pattern; see HOSTING.md |
 
 The second and third options are drop-in: nothing in the plugin or the Liquid
 markup depends on GitHub Pages, only on the URL answering with the JSON.

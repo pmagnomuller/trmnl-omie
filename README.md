@@ -356,10 +356,12 @@ prices-es.json
 Two areas, two files, so switching area never overwrites the other one. Each
 run also fails if it cannot build a payload fresher than 45 minutes.
 
-**Verify the URL before trusting it.** The `gh-pages` branch existing does not
-mean the file is served. Enable Pages once under **Settings -> Pages -> Deploy
-from a branch -> `gh-pages` / (root)**, then check the URL that actually
-answers rather than assuming the shape:
+**Pick a host, then verify the URL.** A branch existing does not mean the file
+is served. This repo serves from **Cloudflare Pages** -- free, works with a
+private repository, no plan wall; step-by-step in
+[`trmnl/polling/HOSTING.md`](trmnl/polling/HOSTING.md). GitHub Pages also works
+if the repository is public (or the plan is paid). Whichever you use, check the
+URL that actually answers rather than assuming the shape:
 
 ```bash
 curl -sL -o /dev/null -w '%{http_code}\n' https://<pages-host>/prices-pt.json   # want 200
@@ -368,10 +370,10 @@ curl -sL https://<pages-host>/prices-pt.json | head -c 200                      
 
 Two traps, both observed on this repo's own account:
 
-- A free plan cannot enable Pages on a **private** repository (the API answers
-  `422: Your current plan does not support GitHub Pages for this repository`).
-  Either make the repository public, use a paid plan, or serve `dist/` from any
-  other static host — nothing in the plugin depends on GitHub Pages.
+- GitHub Pages refuses a **private** repository on the free plan (the API
+  answers `422: Your current plan does not support GitHub Pages for this
+  repository`), which is why this repo uses Cloudflare Pages. Any static host
+  works — nothing in the plugin depends on GitHub Pages.
 - If the account has a **custom domain** on its user site, every
   `<owner>.github.io/...` URL 301-redirects to that domain, so the working
   address is `https://<custom-domain>/<repo>/prices-pt.json`, not the
@@ -379,8 +381,9 @@ Two traps, both observed on this repo's own account:
   redirect body and think the file is empty.
 
 Once the URL answers, set it as a repository variable and every deploy run will
-self-check that Pages is serving the payload it just built (it compares against
-the file the URL names, and unwraps either shape):
+self-check that the host is serving the payload it just built (it compares
+against the file the URL names, and unwraps either shape). Cloudflare Pages
+serves `https://<project>.pages.dev/prices-pt.json`:
 
 ```bash
 gh variable set POLLING_URL -b "https://<pages-host>/prices-pt.json" -R <you>/trmnl-omie
@@ -415,6 +418,7 @@ Step-by-step, submission email draft and demo-video script:
 │   ├── SETUP.md                # TRMNL walkthrough + payload field table
 │   ├── PUBLISH.md              # recipe publishing: unlisted -> public
 │   ├── polling/
+│   │   ├── HOSTING.md            # serve dist/ (Cloudflare Pages, Netlify, GH Pages)
 │   │   └── settings.yml.example  # same plugin on the Polling strategy
 │   ├── example.jpg             # photo of the live display
 │   ├── .trmnlp.yml             # trmnlp dev-server config (watch: src)

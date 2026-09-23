@@ -69,6 +69,23 @@ jobs:
             fi
           fi
 
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT: ${{ vars.CF_PAGES_PROJECT || 'trmnl-omie' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID}" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set; skipping the Pages upload. See trmnl/polling/HOSTING.md."
+            exit 0
+          fi
+          # Idempotent: creating an existing project fails, which is fine.
+          npx --yes wrangler@4 pages project create "${PROJECT}" --production-branch main \
+            || echo "::notice::Pages project ${PROJECT} already exists."
+          npx --yes wrangler@4 pages deploy dist --project-name "${PROJECT}" \
+            --branch main --commit-dirty=true
+
       - name: Deploy to gh-pages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
