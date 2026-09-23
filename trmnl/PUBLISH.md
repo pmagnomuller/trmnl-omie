@@ -162,6 +162,11 @@ email.
   template keys as a public interface: add, do not rename.
 - **The endpoint is load-bearing.** If `publish-json.yml` breaks, every install
   freezes on its last payload. The webhook path is unaffected.
+- **Confirm the schedule fires before publishing.** `gh run list --event
+  schedule` on this repo showed one scheduled run, and only after the workflow
+  file was last modified -- nothing before that, despite the `*/15` cron being
+  present. A recipe built on a cadence that does not actually run freezes for
+  every installer, and the failure is invisible from the display.
 - **Fork.** Reported to require the Developer edition add-on, and a fork stops
   automatic updates; unverified here, confirm with `team@trmnl.com`. MIT covers
   the licensing side either way.
