@@ -1,72 +1,348 @@
 # trmnl-omie
 
-OMIE Iberian day-ahead electricity prices (Portugal / Spain, 15-minute periods) on a [TRMNL](https://trmnl.com) e-ink display.
+Iberian day-ahead electricity prices (OMIE, Portugal / Spain, 15-minute periods) on a [TRMNL](https://trmnl.com) e-ink display.
 
-A GitHub Actions cron fetches OMIE public price files every 15 minutes and pushes a compact payload to a TRMNL Private Plugin webhook. Liquid markup for full, half-vertical and quadrant layouts is included.
+A GitHub Actions cron runs a single stdlib-only Python script every 15 minutes. The script downloads OMIE's public price file, computes the current slot, today's stats, the cheapest upcoming window and a sparkline, and POSTs a compact JSON payload to a TRMNL Private Plugin webhook. TRMNL renders it with the Liquid markup in this repo and the device pulls the image on its next wake.
 
-The same script also works as a standalone CLI / agent skill: upcoming prices, cheapest charging window, PT vs ES comparison, and price-threshold control. No API keys, stdlib-only Python.
+No API keys for price data. The only secret is the TRMNL plugin UUID.
 
-## What the display shows
+---
 
-- Current 15-min slot price (EUR/kWh) and slot label, e.g. `13:00–13:15`
-- Today's min / max / avg day-ahead price
-- Next cheapest 1h block
-- Sparkline of upcoming periods (cents/kWh, 0–10 bar heights)
-- Whether tomorrow's prices are published yet (`tomorrow_ready`)
+## Table of contents
+
+- [How it works](#how-it-works)
+  - [System overview](#system-overview)
+  - [Data flow, one push](#data-flow-one-push)
+  - [Where the time goes](#where-the-time-goes)
+- [Architecture](#architecture)
+  - [Components](#components)
+  - [Data source: OMIE `marginalpdbc`](#data-source-omie-marginalpdbc)
+  - [Payload](#payload)
+  - [Rendering](#rendering)
+  - [Configuration precedence](#configuration-precedence)
+- [Setup](#setup)
+- [Local use](#local-use)
+- [Repo layout](#repo-layout)
+- [Design decisions](#design-decisions)
+- [Related](#related)
+
+---
+
+## How it works
+
+### System overview
+
+```mermaid
+flowchart LR
+    subgraph OMIE["OMIE (public)"]
+        F["marginalpdbc_YYYYMMDD.1<br/>CSV, 96 × 15-min rows"]
+    end
+
+    subgraph GH["GitHub Actions · cron */15"]
+        W["trmnl-omie.yml"] --> S["omie_energy.py<br/>trmnl --push"]
+    end
+
+    subgraph TRMNL["TRMNL cloud"]
+        H["Private Plugin webhook<br/>/api/custom_plugins/&lt;UUID&gt;"]
+        M["merge_variables store"]
+        R["Liquid renderer<br/>full / half / quadrant"]
+        H --> M --> R
+    end
+
+    D["TRMNL device<br/>e-ink, wakes every N min"]
+
+    F -- "HTTP GET (yesterday..+2d)" --> S
+    S -- "POST JSON ≤ 2 KB" --> H
+    R -- "PNG on wake" --> D
+```
+
+Two independent loops, decoupled by TRMNL's `merge_variables` store:
+
+| Loop | Driver | Cadence | What it does |
+|---|---|---|---|
+| **Push** | GitHub Actions cron | every 15 min | fetch OMIE → compute → POST payload |
+| **Pull** | TRMNL device firmware | playlist refresh (15–30 min) | fetch rendered image, sleep |
+
+The device never talks to this repo or to OMIE. TRMNL always has the last successful payload, so a failed push just means a stale slot label, not a blank screen.
+
+### Data flow, one push
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant GA as GitHub Actions
+    participant PY as omie_energy.py
+    participant OM as OMIE
+    participant TR as TRMNL webhook
+    participant DEV as Device
+
+    GA->>PY: bash run.sh trmnl --area PT --push
+    PY->>PY: load config (env → ~/.config → default PT)
+    loop day in [today−1, today+2]
+        PY->>OM: GET marginalpdbc_{day}.1
+        OM-->>PY: CSV or 404 (not published yet)
+    end
+    PY->>PY: parse rows → 15-min points (Europe/Lisbon)
+    PY->>PY: current slot · today min/max/avg · cheapest 1h · sparkline
+    PY->>PY: shrink upcoming[] until JSON ≤ 2000 bytes
+    PY->>OM: HEAD-ish GET tomorrow's file → tomorrow_ready
+    PY->>TR: POST {merge_variables: {...}}
+    TR-->>PY: 200 + echo of stored variables
+    Note over TR,DEV: later, on device wake
+    DEV->>TR: next screen?
+    TR-->>DEV: rendered PNG from Liquid + merge_variables
+```
+
+### Where the time goes
+
+```mermaid
+gantt
+    title Timing on a typical day (Europe/Lisbon)
+    dateFormat HH:mm
+    axisFormat %H:%M
+    section OMIE
+    Today's file available (published D-1 ~13:00)   :done, 00:00, 24h
+    Tomorrow's file published                        :milestone, 13:00, 0m
+    section Push loop
+    Cron every 15 min                                :active, 00:00, 24h
+    section Payload
+    tomorrow_ready = false                           :00:00, 13h
+    tomorrow_ready = true                            :13:00, 11h
+```
+
+Prices only change once a day when OMIE publishes. The 15-minute cron exists to move the "Now" slot label, recompute the cheapest-next window from the current time, and flip `tomorrow_ready` in the afternoon.
+
+---
+
+## Architecture
+
+### Components
+
+```mermaid
+flowchart TB
+    subgraph script["omie_energy.py (648 lines, stdlib only)"]
+        direction TB
+        cfg["config<br/>load_local_env_file · load_home_config · resolve_area · resolve_trmnl_uuid"]
+        fetch["fetch<br/>fetch_day_file · download_text · parse_marginalpdbc · fetch_area_prices"]
+        calc["compute<br/>current_point · upcoming_points · best_window · hours_to_quarters"]
+        payload["trmnl<br/>build_trmnl_payload · push_trmnl · command_trmnl"]
+        cli["CLI<br/>prices · optimize · compare · control · trmnl"]
+        cfg --> cli
+        fetch --> calc --> payload --> cli
+    end
+
+    run["run.sh<br/>source .env, exec python3"] --> script
+    wf[".github/workflows/trmnl-omie.yml"] --> run
+    liquid["trmnl/markup/*.liquid"] -. "consumes payload keys" .-> payload
+```
+
+- **`run.sh`** loads a local `.env` if present, then `exec`s the script. Keeps secrets out of shell history and out of the workflow file.
+- **`omie_energy.py`** is one file on purpose: copy it anywhere with Python 3.9+ and it runs. Dependencies are `urllib`, `csv`, `json`, `zoneinfo`, `argparse`.
+- **Liquid templates** are the only TRMNL-side code. They read payload keys, nothing else.
+- **Workflow** is 30 lines: checkout, setup-python, run with `OMIE_AREA=PT` and the secret.
+
+### Data source: OMIE `marginalpdbc`
+
+OMIE publishes one file per market day:
+
+```
+https://www.omie.es/en/file-download?parents=marginalpdbc&filename=marginalpdbc_YYYYMMDD.1
+```
+
+Format (semicolon CSV, header line `MARGINALPDBC;`, trailer `*`):
+
+```
+year;month;day;period;price_PT;price_ES;
+2026;09;23;1;95.10;95.10;
+2026;09;23;2;90.02;90.02;
+...
+2026;09;23;96;110.45;108.90;
+*
+```
+
+- **period** 1..96 = 15-minute slots starting 00:00 Iberian local time. Period 1 is `00:00–00:15`.
+- **price** in EUR/MWh. The script divides by 1000 for EUR/kWh.
+- Column 4 is Portugal, column 5 is Spain (`AREA_PRICE_INDEX`).
+- DST transition days may carry 92 or 100 rows. The parser keeps whatever is there.
+- A 404, an HTML body, or a body not starting with `MARGINALPDBC` all mean "not published yet" and return `None` instead of raising.
+
+Default fetch window is **yesterday → today+2**. Yesterday guarantees a "current" point just after midnight before today's file is confirmed; +2 is harmless over-fetch that just 404s.
+
+### Payload
+
+`build_trmnl_payload` produces this shape (PT example, trimmed):
+
+```json
+{
+  "area": "PT",
+  "area_label": "Portugal",
+  "updated_at": "2026-09-23T08:39:16+01:00",
+  "updated_label": "08:39",
+  "current": {
+    "price_eur_kwh": 0.2243,
+    "price_eur_mwh": 224.31,
+    "price_cents_kwh": 22,
+    "price_label": "0.2243",
+    "starts_at": "2026-09-23T08:30:00+01:00",
+    "ends_at":   "2026-09-23T08:45:00+01:00",
+    "slot_label": "08:30–08:45"
+  },
+  "today": { "min": 0.01, "max": 0.2744, "avg": 0.1603 },
+  "today_min_label": "0.0100",
+  "today_max_label": "0.2744",
+  "today_avg_label": "0.1603",
+  "cheapest_next": {
+    "starts_at": "...", "ends_at": "...",
+    "label": "13:00–14:00",
+    "avg_eur_kwh": 0.0312, "avg_cents_kwh": 3, "quarters": 4
+  },
+  "upcoming": {
+    "t":     ["08:30", "08:45", "..."],
+    "p":     [22, 19, "..."],
+    "bars":  [10, 8, "..."],
+    "count": 32
+  },
+  "tomorrow_ready": false
+}
+```
+
+How each block is computed:
+
+```mermaid
+flowchart LR
+    pts["points[] (15-min, sorted)"]
+    now["now (Europe/Lisbon)"]
+
+    pts & now --> cur["current_point<br/>startsAt ≤ now &lt; endsAt<br/>fallback: last past point"]
+    pts & now --> up["upcoming_points<br/>endsAt &gt; now"]
+    pts --> td["today_points<br/>market_date == today"]
+
+    td --> stats["min / max / avg"]
+    up --> bw["best_window(1h = 4 quarters)<br/>sliding sum, contiguity check"]
+    up --> spark["first N points →<br/>t labels · p cents · bars 0–10"]
+
+    cur --> P["payload"]
+    stats --> P
+    bw --> P
+    spark --> P
+    tomorrow["day_file_available(today+1)"] --> P
+```
+
+- **`best_window`** is a plain sliding window over `upcoming`, rejecting any chunk whose consecutive timestamps aren't exactly 15 min apart (guards DST gaps and missing rows). Cheapest = lowest sum of EUR/kWh.
+- **`bars`** are min-max normalised to integers 0–10 so Liquid can do `height: {{ h | times: 10 }}%` without floats.
+- **Size guard**: TRMNL's webhook guidance is ~2 KB. If the compact JSON exceeds 2000 bytes, `upcoming_count` is retried at 24, 16, 12, 8. Typical PT payload is ~1.1 KB at 32 points.
+- **`tomorrow_ready`** costs one extra GET but lets the template say "tomorrow's prices published" without a second data path.
+
+### Rendering
+
+TRMNL stores the POSTed `merge_variables` and re-renders on each device fetch. The templates only use these keys:
+
+| Template | Uses |
+|---|---|
+| `full.liquid` | `current.*`, `cheapest_next.*`, `today_*_label`, `upcoming.bars`, `upcoming.t`, `upcoming.count`, `area_label`, `updated_label` |
+| `half_vertical.liquid` | subset: current, cheapest next, today stats |
+| `quadrant.liquid` | current price + slot, cheapest next label |
+
+The sparkline is a CSS-only bar chart: a `grid--cols-{{ upcoming.count }}` with one `div` per bar whose height is `bars[i] × 10 %`. Time labels are thinned to every `count / 4`th slot to fit the 800 px width.
+
+### Configuration precedence
+
+```mermaid
+flowchart TD
+    A["env vars<br/>OMIE_AREA · TRMNL_PLUGIN_UUID"] -->|set?| Z["use it"]
+    A -->|unset| B["~/.config/omie-energy/config.json<br/>OMIE_AREA / omie_area · TRMNL_PLUGIN_UUID / trmnl_plugin_uuid"]
+    B -->|set?| Z
+    B -->|unset| C["defaults<br/>area = PT · uuid = none → --push errors"]
+```
+
+`run.sh` sources `./.env` into the environment before Python starts, so a local `.env` is just "env vars" in this diagram. In GitHub Actions the workflow sets both directly.
+
+---
 
 ## Setup
 
-1. TRMNL → **Plugins → Private Plugin**, strategy **Webhook**, save, copy the UUID from `https://trmnl.com/api/custom_plugins/<UUID>`.
-2. Paste markup from [`trmnl/markup/`](trmnl/markup/) (`full.liquid`, `half_vertical.liquid`, `quadrant.liquid`).
-3. Add repo secret `TRMNL_PLUGIN_UUID`. The workflow [`.github/workflows/trmnl-omie.yml`](.github/workflows/trmnl-omie.yml) runs every 15 minutes (and on manual dispatch) and pushes PT prices.
-4. Add the plugin to your device playlist (15–30 min refresh is enough).
+1. **TRMNL → Plugins → Private Plugin → Add.** Strategy **Webhook**. Name it, save. Copy the UUID from the webhook URL `https://trmnl.com/api/custom_plugins/<UUID>`.
+2. **Edit Markup.** Paste each file from [`trmnl/markup/`](trmnl/markup/) into its layout tab. Save.
+3. **Test from your machine** before touching CI:
+   ```bash
+   export TRMNL_PLUGIN_UUID="<uuid>"
+   bash run.sh trmnl --area PT --push
+   # → Pushed to TRMNL (200): {...}
+   ```
+4. **Enable the cron:**
+   ```bash
+   gh secret set TRMNL_PLUGIN_UUID -R <you>/trmnl-omie
+   gh workflow run trmnl-omie.yml -R <you>/trmnl-omie
+   gh run watch -R <you>/trmnl-omie
+   ```
+5. **Playlist.** Add the plugin to your device playlist. 15–30 min refresh is enough.
 
-Full walkthrough and payload field reference: [`trmnl/SETUP.md`](trmnl/SETUP.md).
+For Spain, change `OMIE_AREA: PT` to `ES` in the workflow. Field-by-field payload reference and troubleshooting: [`trmnl/SETUP.md`](trmnl/SETUP.md).
+
+---
 
 ## Local use
 
+The same script is a general OMIE CLI / agent skill.
+
 ```bash
-# dry-run: print the TRMNL payload
-bash run.sh trmnl --area PT
+bash run.sh trmnl --area PT                 # print payload, no push
+bash run.sh trmnl --area PT --push          # push once
 
-# push once
-export TRMNL_PLUGIN_UUID="your-uuid"
-bash run.sh trmnl --area PT --push
-
-# other commands
-bash run.sh prices --area PT --hours 8
+bash run.sh prices --area PT --hours 8      # next 32 periods
 bash run.sh prices --area ES --hours 36
-bash run.sh compare --hours 24
-bash run.sh optimize --area PT --duration-hours 2
-bash run.sh optimize --area PT --kwh 28 --power-kw 11
-bash run.sh control --area PT --price-below 0.10 --on-command "echo on" --off-command "echo off"
+bash run.sh compare --hours 24              # PT vs ES side by side
+
+bash run.sh optimize --area PT --duration-hours 2      # cheapest 2h from now
+bash run.sh optimize --area PT --kwh 28 --power-kw 11  # duration from energy/power
+
+# dry-run: prints which command would fire
+bash run.sh control --area PT --price-below 0.10 \
+  --on-command "echo on" --off-command "echo off"
+# add --execute to actually run them
 ```
 
-Default area / UUID can live in `.env` (copy `.env.example`) or `~/.config/omie-energy/config.json` (copy `config.json.example`). Precedence: env vars → config file → `PT`.
+Thresholds for `optimize` / `control` are **EUR/kWh**. All timestamps are `Europe/Lisbon`.
 
-## Price units
+---
 
-- OMIE publishes **EUR/MWh**; the CLI also shows **EUR/kWh** (`÷ 1000`).
-- `optimize` / `control` thresholds are in **EUR/kWh**.
-- Timestamps are `Europe/Lisbon`. DST days may carry extra periods.
+## Repo layout
 
-## Safety
+```
+.
+├── omie_energy.py              # everything: fetch, compute, CLI, TRMNL push
+├── run.sh                      # source .env, exec python3
+├── requirements.txt            # empty on purpose (stdlib only)
+├── .env.example                # OMIE_AREA, TRMNL_PLUGIN_UUID
+├── config.json.example         # same keys, for ~/.config/omie-energy/
+├── SKILL.md                    # agent-skill metadata (OpenClaw / ClawHub)
+├── trmnl/
+│   ├── SETUP.md                # TRMNL walkthrough + payload field table
+│   └── markup/
+│       ├── full.liquid
+│       ├── half_vertical.liquid
+│       └── quadrant.liquid
+└── .github/workflows/
+    └── trmnl-omie.yml          # */15 cron + workflow_dispatch
+```
 
-- `.env` is git-ignored. Only `TRMNL_PLUGIN_UUID` is a secret; OMIE data is public.
-- `control` is dry-run by default; add `--execute` only after verifying thresholds.
-- `--on-command` / `--off-command` run as shell commands — trusted input only.
+---
 
-## Files
+## Design decisions
 
-- `omie_energy.py` — OMIE fetch, optimize/compare/control, TRMNL payload + webhook push
-- `run.sh` — launcher that loads `.env` and runs the script
-- `trmnl/SETUP.md`, `trmnl/markup/*.liquid` — Private Plugin setup and layouts
-- `.github/workflows/trmnl-omie.yml` — 15-min cron push
-- `SKILL.md` — agent-skill metadata (OpenClaw / ClawHub)
-- `.env.example`, `config.json.example`, `requirements.txt`
+- **Push, not poll.** TRMNL's Polling strategy would need a public URL serving JSON. Webhook + GitHub Actions needs nothing hosted.
+- **Stdlib only.** Earlier versions used the `OMIEData` PyPI package. Parsing the CSV directly removed the dependency, removed pandas, and made the 15-minute granularity available (the library exposed hourly).
+- **One file.** Skill runners (OpenClaw, Claude Code, Cursor) copy directories around. A single script with no imports beyond stdlib survives that.
+- **Compute on the pusher, not in Liquid.** Liquid has no date math and clumsy floats. All labels, rounding and normalisation happen in Python; templates only place strings.
+- **Idempotent pushes.** Every run rebuilds the full payload. No state, no diffing, safe to re-run or run twice.
+- **Fail loud in CI, fail soft on data.** Missing secret exits 1. Missing tomorrow's file is normal and returns `None`.
+
+---
 
 ## Related
 
-- [omie-energy](https://github.com/pmagnomuller/omie-energy) — original hourly skill
-- [ostrom-energy](https://github.com/pmagnomuller/ostrom-energy), [tibber-energy](https://github.com/pmagnomuller/tibber-energy)
+- [omie-energy](https://github.com/pmagnomuller/omie-energy) — original hourly version of this skill
+- [ostrom-energy](https://github.com/pmagnomuller/ostrom-energy), [tibber-energy](https://github.com/pmagnomuller/tibber-energy) — sibling skills for German retail tariffs
+- [grid-pulse](https://github.com/pmagnomuller/grid-pulse) — energy transparency project this grew out of
 - Writeup: [OpenClaw on My Homelab](https://pedro-muller.com/homelab/openclaw-on-my-homelab/)
+- TRMNL docs: [Private Plugins](https://help.trmnl.com/en/articles/9510536-private-plugins)
