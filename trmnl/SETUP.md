@@ -17,9 +17,9 @@ Open the Markup editor and paste:
 
 | Size | File |
 |------|------|
-| Full | [`markup/full.liquid`](markup/full.liquid) |
-| Half vertical | [`markup/half_vertical.liquid`](markup/half_vertical.liquid) |
-| Quadrant | [`markup/quadrant.liquid`](markup/quadrant.liquid) |
+| Full | [`src/full.liquid`](src/full.liquid) |
+| Half vertical | [`src/half_vertical.liquid`](src/half_vertical.liquid) |
+| Quadrant | [`src/quadrant.liquid`](src/quadrant.liquid) |
 
 ### 3. Configure the skill / CI
 

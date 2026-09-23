@@ -133,12 +133,12 @@ flowchart TB
 
     run["run.sh<br/>source .env, exec python3"] --> script
     wf[".github/workflows/trmnl-omie.yml"] --> run
-    liquid["trmnl/markup/*.liquid"] -. "consumes payload keys" .-> payload
+    liquid["trmnl/src/*.liquid<br/>(GitHub-synced with TRMNL)"] -. "consumes payload keys" .-> payload
 ```
 
 - **`run.sh`** loads a local `.env` if present, then `exec`s the script. Keeps secrets out of shell history and out of the workflow file.
 - **`omie_energy.py`** is one file on purpose: copy it anywhere with Python 3.9+ and it runs. Dependencies are `urllib`, `csv`, `json`, `zoneinfo`, `argparse`.
-- **Liquid templates** are the only TRMNL-side code. They read payload keys, nothing else.
+- **Liquid templates** are the only TRMNL-side code. They read payload keys, nothing else. The plugin is connected to this repo via TRMNL's GitHub sync, so edits in `trmnl/src/` on `main` land in the plugin and edits in the TRMNL editor come back as "Updated from TRMNL" commits.
 - **Workflow** is 30 lines: checkout, setup-python, run with `OMIE_AREA=PT` and the secret.
 
 ### Data source: OMIE `marginalpdbc`
@@ -262,7 +262,7 @@ flowchart TD
 ## Setup
 
 1. **TRMNL → Plugins → Private Plugin → Add.** Strategy **Webhook**. Name it, save. Copy the UUID from the webhook URL `https://trmnl.com/api/custom_plugins/<UUID>`.
-2. **Edit Markup.** Paste each file from [`trmnl/markup/`](trmnl/markup/) into its layout tab. Save.
+2. **Markup.** Either connect the plugin to this repo (plugin → *Connect to GitHub*, folder `trmnl`) so `trmnl/src/*.liquid` and `settings.yml` sync both ways, or paste each file from [`trmnl/src/`](trmnl/src/) into its layout tab manually.
 3. **Test from your machine** before touching CI:
    ```bash
    export TRMNL_PLUGIN_UUID="<uuid>"
@@ -318,7 +318,9 @@ Thresholds for `optimize` / `control` are **EUR/kWh**. All timestamps are `Europ
 ├── SKILL.md                    # agent-skill metadata (OpenClaw / ClawHub)
 ├── trmnl/
 │   ├── SETUP.md                # TRMNL walkthrough + payload field table
-│   └── markup/
+│   ├── .trmnlp.yml             # written by TRMNL GitHub sync (trmnlp serve config)
+│   └── src/                    # synced both ways with the TRMNL plugin
+│       ├── settings.yml        # plugin settings (strategy, refresh, id)
 │       ├── full.liquid
 │       ├── half_vertical.liquid
 │       └── quadrant.liquid
